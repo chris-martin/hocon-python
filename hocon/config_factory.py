@@ -23,61 +23,6 @@ examples.
 from . import impl
 
     /**
-     * Obtains the default override configuration, which currently consists of
-     * system properties. The returned override configuration will already have
-     * substitutions resolved.
-     *
-     * <p>
-     * The {@link #load()} methods merge this configuration for you
-     * automatically.
-     *
-     * <p>
-     * Future versions may get overrides in more places. It is not guaranteed
-     * that this method <em>only</em> uses system properties.
-     *
-     * @return the default override configuration
-     */
-    public static Config defaultOverrides() {
-        return systemProperties();
-    }
-
-    /**
-     * Like {@link #defaultOverrides()} but allows you to specify a class loader
-     * to use rather than the current context class loader.
-     *
-     * @param loader
-     * @return the default override configuration
-     */
-    public static Config defaultOverrides(ClassLoader loader) {
-        return systemProperties();
-    }
-
-    /**
-     * Reloads any cached configs, picking up changes to system properties for
-     * example. Because a {@link Config} is immutable, anyone with a reference
-     * to the old configs will still have the same outdated objects. However,
-     * new calls to {@link #load()} or {@link #defaultOverrides()} or
-     * {@link #defaultReference} may return a new object.
-     * <p>
-     * This method is primarily intended for use in unit tests, for example,
-     * that may want to update a system property then confirm that it's used
-     * correctly. In many cases, use of this method may indicate there's a
-     * better way to set up your code.
-     * <p>
-     * Caches may be reloaded immediately or lazily; once you call this method,
-     * the reload can occur at any time, even during the invalidation process.
-     * So FIRST make the changes you'd like the caches to notice, then SECOND
-     * call this method to invalidate caches. Don't expect that invalidating,
-     * making changes, then calling {@link #load()}, will work. Make changes
-     * before you invalidate.
-     */
-    public static void invalidateCaches() {
-        // We rely on this having the side effect that it drops
-        // all caches
-        ConfigImpl.reloadSystemPropertiesConfig();
-    }
-
-    /**
      * Gets an empty configuration. See also {@link #empty(String)} to create an
      * empty configuration with a description, which may improve user-visible
      * error messages.
@@ -102,29 +47,6 @@ from . import impl
      */
     public static Config empty(String originDescription) {
         return ConfigImpl.emptyConfig(originDescription);
-    }
-
-    /**
-     * Gets a <code>Config</code> containing the system properties from
-     * {@link java.lang.System#getProperties()}, parsed and converted as with
-     * {@link #parseProperties}.
-     * <p>
-     * This method can return a global immutable singleton, so it's preferred
-     * over parsing system properties yourself.
-     * <p>
-     * {@link #load} will include the system properties as overrides already, as
-     * will {@link #defaultReference} and {@link #defaultOverrides}.
-     *
-     * <p>
-     * Because this returns a singleton, it will not notice changes to system
-     * properties made after the first time this method is called. Use
-     * {@link #invalidateCaches()} to force the singleton to reload if you
-     * modify system properties.
-     *
-     * @return system properties parsed into a <code>Config</code>
-     */
-    public static Config systemProperties() {
-        return ConfigImpl.systemPropertiesAsConfig();
     }
 
     /**
