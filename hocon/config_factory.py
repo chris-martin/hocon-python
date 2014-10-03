@@ -69,31 +69,41 @@ def system_environment():
     return impl.ConfigImpl.env_variables_as_config()
 
 
-    public static Config parseReader(Reader reader, ConfigParseOptions options) {
-        return Parseable.newReader(reader, options).parse().toConfig();
-    }
+def parse_file(f, options=None):
+    """
+    :param f: a filelike object
+    :param options: ConfigParseOptions
+    :return: Config
+    """
+    if options is None:
+        options = ConfigParseOptions.defaults()
+    return impl.Parseable.new_file(f, options).parse().to_config()
 
-    public static Config parseReader(Reader reader) {
-        return parseReader(reader, ConfigParseOptions.defaults());
-    }
 
-    public static Config parseURL(URL url, ConfigParseOptions options) {
-        return Parseable.newURL(url, options).parse().toConfig();
-    }
+def parse_url(url, options=None):
+    """
+    :param url: String
+    :param options: ConfigParseOptions
+    :return: Config
+    """
+    if options is None:
+        options = ConfigParseOptions.defaults()
+    return impl.Parseable.new_url(url, options).parse().to_config()
 
-    public static Config parseURL(URL url) {
-        return parseURL(url, ConfigParseOptions.defaults());
-    }
 
-    public static Config parseFile(File file, ConfigParseOptions options) {
-        return Parseable.newFile(file, options).parse().toConfig();
-    }
+def parse_path(path, options=None):
+    """
+    :param path: String - filesystem path
+    :param options: ConfigParseOptions
+    :return: Config
+    """
+    if options is None:
+        options = ConfigParseOptions.defaults()
+    return impl.ConfigImpl.parse_path(path, options).to_config()
 
-    public static Config parseFile(File file) {
-        return parseFile(file, ConfigParseOptions.defaults());
-    }
 
-    /**
+def parse_path_any_syntax(path_basename, options=None):
+    """
      * Parses a file with a flexible extension. If the <code>fileBasename</code>
      * already ends in a known extension, this method parses it according to
      * that extension (the file's syntax must match its extension). If the
@@ -119,21 +129,16 @@ def system_environment():
      * If {@link ConfigParseOptions#getAllowMissing options.getAllowMissing()}
      * is true, then no files have to exist; if false, then at least one file
      * has to exist.
-     *
-     * @param fileBasename
-     *            a filename with or without extension
-     * @param options
-     *            parse options
-     * @return the parsed configuration
-     */
-    public static Config parseFileAnySyntax(File fileBasename,
-            ConfigParseOptions options) {
-        return ConfigImpl.parseFileAnySyntax(fileBasename, options).toConfig();
-    }
 
-    public static Config parseFileAnySyntax(File fileBasename) {
-        return parseFileAnySyntax(fileBasename, ConfigParseOptions.defaults());
-    }
+    :param file_basename: String - a filename with or without extension
+    :param options: ConfigParseOptions
+    :return: Config - the parsed configuration
+    """
+    if options is None:
+        options = ConfigParseOptions.defaults()
+    return impl.ConfigImpl.parse_path_any_syntax(path_basename, options) \
+        .to_config()
+
 
     /**
      * Parses all resources on the classpath with the given name and merges them
