@@ -22,18 +22,19 @@ examples.
 
 from . import impl
 
-    /**
+
+def empty(origin_description=None):
+    """
+    public static Config empty()
+
      * Gets an empty configuration. See also {@link #empty(String)} to create an
      * empty configuration with a description, which may improve user-visible
      * error messages.
      *
      * @return an empty configuration
-     */
-    public static Config empty() {
-        return empty(null);
-    }
 
-    /**
+    public static Config empty(String originDescription)
+
      * Gets an empty configuration with a description to be used to create a
      * {@link ConfigOrigin} for this <code>Config</code>. The description should
      * be very short and say what the configuration is, like "default settings"
@@ -44,12 +45,14 @@ from . import impl
      * @param originDescription
      *            description of the config
      * @return an empty configuration
-     */
-    public static Config empty(String originDescription) {
-        return ConfigImpl.emptyConfig(originDescription);
-    }
+    """
+    return impl.ConfigImpl.empty_config(origin_description)
 
-    /**
+
+def system_environment():
+    """
+    public static Config systemEnvironment()
+
      * Gets a <code>Config</code> containing the system's environment variables.
      * This method can return a global immutable singleton.
      *
@@ -62,10 +65,9 @@ from . import impl
      * such as {@link Config#getInt}.
      *
      * @return system environment variables parsed into a <code>Config</code>
-     */
-    public static Config systemEnvironment() {
-        return ConfigImpl.envVariablesAsConfig();
-    }
+    """
+    return impl.ConfigImpl.env_variables_as_config()
+
 
     /**
      * Converts a Java {@link java.util.Properties} object to a
