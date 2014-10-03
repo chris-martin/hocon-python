@@ -140,15 +140,19 @@ def parse_path_any_syntax(path_basename, options=None):
         .to_config()
 
 
-    public static Config parseString(String s, ConfigParseOptions options) {
-        return Parseable.newString(s, options).parse().toConfig();
-    }
+def parse_string(s, options=None):
+    """
+    :param s: String
+    :param options: ConfigParseOptions
+    :return: Config
+    """
+    if options is None:
+        options = ConfigParseOptions.defaults()
+    return impl.Parseable.new_string(s, options).parse().to_config()
 
-    public static Config parseString(String s) {
-        return parseString(s, ConfigParseOptions.defaults());
-    }
 
-    /**
+def parse_dict(values, origin_description=None):
+    """
      * Creates a {@code Config} based on a {@link java.util.Map} from paths to
      * plain Java values. Similar to
      * {@link ConfigValueFactory#fromMap(Map,String)}, except the keys in the
@@ -163,26 +167,12 @@ def parse_path_any_syntax(path_basename, options=None):
      * "a=foo" and "a.b=bar", then "a" is both the string "foo" and the parent
      * object of "b". The caller of this method should ensure that doesn't
      * happen.
-     *
-     * @param values
-     * @param originDescription
-     *            description of what this map represents, like a filename, or
-     *            "default settings" (origin description is used in error
-     *            messages)
-     * @return the map converted to a {@code Config}
-     */
-    public static Config parseMap(Map<String, ? extends Object> values,
-            String originDescription) {
-        return ConfigImpl.fromPathMap(values, originDescription).toConfig();
-    }
 
-    /**
-     * See the other overload of {@link #parseMap(Map, String)} for details,
-     * this one just uses a default origin description.
-     *
-     * @param values
-     * @return the map converted to a {@code Config}
-     */
-    public static Config parseMap(Map<String, ? extends Object> values) {
-        return parseMap(values, null);
-    }
+    :param values: Map<String, ? extends Object>
+    :param origin_description: String - description of what this map represents,
+        like a filename, or "default settings" (origin description is used in
+        error messages)
+    :return: Config - the map converted to a {@code Config}
+    """
+    return impl.ConfigImpl.from_path_dict(values, origin_description) \
+        .to_config()
