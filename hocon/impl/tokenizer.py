@@ -1,4 +1,6 @@
 from .. import exceptions, ConfigOrigin, ConfigSyntax
+from . import tokens, Tokens, util
+from .TokenType import TokenType
 
 
 # this exception should not leave this file
@@ -59,6 +61,24 @@ def is_simple_value(t):
         or Tokens.is_value(t)
 
 
+def is_whitespace_not_newline(c):
+    """
+    :param c: character
+    :return: boolean
+    """
+    return c != '\n' and util.is_whitespace(c)
+
+
+# chars JSON allows a number to start with
+first_number_chars = "0123456789-"
+
+# chars JSON allows to be part of a number
+number_chars = "0123456789eE+-."
+
+# chars that stop an unquoted string
+not_in_unquoted_text = "$\"{}[]:=,+#`^?!@*&\\"
+
+
 class WhitespaceSaver(object):
     """
     Attributes:
@@ -113,7 +133,7 @@ class WhitespaceSaver(object):
             # the parser has the option to concatenate it.
             if len(self.whitespace) > 0:
                 t = Tokens.new_unquoted_text(
-                    line_origin(base_origin, line_number),
+                    base_origin.set_line_number(line_number),
                     unicode(self.whitespace))
                 self.whitespace = ''  # reset
                 return t
@@ -141,8 +161,7 @@ class TokenIterator(object):
         self.buffer = []  # LinkedList<Integer>
         self.line_number = 1  # nonfinal
         self.line_origin = origin.set_line_number(line_number)  # nonfinal
-        self.tokens = []  # Queue<Token>
-        self.tokens.add(Tokens.START)
+        self.tokens = [Tokens.START]  # Queue<Token>
         self.whitespace_saver = WhitespaceSaver()
 
     def next_char_raw(self):
@@ -155,507 +174,452 @@ class TokenIterator(object):
         """
         if len(self.buffer) == 0:
             try:
-                return self.input.read()  # todo - this should read a character from the input
+                return self.input.read()
             except Exception as e:
                 raise exceptions.IO(origin, "read error: " + e.message, e)
         else:
             c = self.buffer.pop()
             return c
 
-    private void putBack(int c) {
-        if (buffer.size() > 2) {
-            throw new ConfigException.BugOrBroken(
-                    "bug: putBack() three times, undesirable look-ahead");
-        }
-        buffer.push(c);
-    }
+    def put_back(self, c):
+        """
+        :param c: character
+        """
+        if len(self.buffer) > 2:
+            raise exceptions.BugOrBroken(
+                "bug: putBack() three times, undesirable look-ahead")
+        self.buffer.push(c)
 
-    static boolean isWhitespace(int c) {
-        return ConfigImplUtil.isWhitespace(c);
-    }
+    def start_of_comment(self, c):
+        """
+        :param c: character
+        :return: boolean
+        """
+        if c is None:  # todo - is None the file.read() equivalent of codepoint -1?
+            return False
+        if not allowComments:
+            return False
+        if c == '#':
+            return True
+        if c != '/':
+            return False
+        maybe_second_slash = self.next_char_raw()
+        # we want to predictably NOT consume any chars
+        self.put_back(maybe_second_slash)
+        return maybe_second_slash == '/'
 
-    static boolean isWhitespaceNotNewline(int c) {
-        return c != '\n' && ConfigImplUtil.isWhitespace(c);
-    }
+    def next_char_after_whitespace(self, saver):
+        """
+        get next char, skipping non-newline whitespace
 
-    private boolean startOfComment(int c) {
-        if (c == -1) {
-            return false;
-        } else {
-            if (allowComments) {
-                if (c == '#') {
-                    return true;
-                } else if (c == '/') {
-                    int maybeSecondSlash = nextCharRaw();
-                    // we want to predictably NOT consume any chars
-                    putBack(maybeSecondSlash);
-                    if (maybeSecondSlash == '/') {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-    }
+        :param saver: WhitespaceSaver
+        :return: character
+        """
+        while True:
+            c = self.next_char_raw()
+            if c is None:
+                return None  # todo - is None the file.read() equivalent of codepoint -1?
+            if util.is_whitespace_not_newline(c):
+                saver.add(c)
+                continue
+            return c
 
-    // get next char, skipping non-newline whitespace
-    private int nextCharAfterWhitespace(WhitespaceSaver saver) {
-        for (;;) {
-            int c = nextCharRaw();
+    def problem(self, message, what="", origin=None, cause=None,
+                suggest_quotes=False):
+        """
+        :param message: String
+        :param what: String
+        :param origin: ConfigOrigin
+        :param cause: Throwable
+        :param suggest_quotes: boolean
+        :return: ProblemException
+        """
+        if origin is None:
+            origin = self.line_origin
+        if (what is None) or (message is None):
+            raise exceptions.BugOrBroken(
+                "internal error, creating bad ProblemException")
+        return ProblemException(tokens.new_problem(
+            origin=origin, what=what, message=message,
+            suggest_quotes=suggest_quotes, cause=cause))
 
-            if (c == -1) {
-                return -1;
-            } else {
-                if (isWhitespaceNotNewline(c)) {
-                    saver.add(c);
-                    continue;
-                } else {
-                    return c;
-                }
-            }
-        }
-    }
+    def pull_comment(self, first_char):
+        """
+        ONE char has always been consumed, either the # or the first /, but
+        not both slashes
 
-    private ProblemException problem(String message) {
-        return problem("", message, null);
-    }
+        :param first_char: character
+        :return: Token
+        """
+        if firstChar == '/':
+            discard = self.next_char_raw()
+            if (discard != '/'):
+                raise exception.BugOrBroken("called pullComment but // not seen")
 
-    private ProblemException problem(String what, String message) {
-        return problem(what, message, null);
-    }
+        s = ''
+        while True:
+            c = self.next_char_raw()
+            if c == -1 or c == '\n':
+                self.put_back(c)
+                return Tokens.new_comment(origin=self.line_origin, text=s)
+            s += c
 
-    private ProblemException problem(String what, String message, boolean suggestQuotes) {
-        return problem(what, message, suggestQuotes, null);
-    }
+    def pull_unquoted_text(self):
+        """
+        The rules here are intended to maximize convenience while
+        avoiding confusion with real valid JSON. Basically anything
+        that parses as JSON is treated the JSON way and otherwise
+        we assume it's a string and let the parser sort it out.
 
-    private ProblemException problem(String what, String message, Throwable cause) {
-        return problem(lineOrigin, what, message, cause);
-    }
+        :return: Token
+        """
+        origin = self.line_rigin
+        s = ''
+        c = self.next_char_raw()
+        while True:
+            if c is None:  # todo - is None the file.read() equivalent of codepoint -1?
+                break
+            if not_in_unquoted_text.index(c) >= 0:
+                break
+            if util.is_whitespace(c):
+                break
+            if self.start_of_comment(c):
+                break
+            s += c
 
-    private ProblemException problem(String what, String message, boolean suggestQuotes,
-            Throwable cause) {
-        return problem(lineOrigin, what, message, suggestQuotes, cause);
-    }
+            # we parse true/false/null tokens as such no matter
+            # what is after them, as long as they are at the
+            # start of the unquoted token.
+            if len(s) == 4:
+                if s == "true":
+                    return tokens.new_boolean(origin=origin, value=True)
+                if s == "null":
+                    return tokens.new_null(origin=origin)
+            elif len(s) == 5:
+                if s == "false":
+                    return tokens.new_boolean(origin=origin, value=False)
 
-    private static ProblemException problem(ConfigOrigin origin, String what,
-            String message,
-            Throwable cause) {
-        return problem(origin, what, message, false, cause);
-    }
+            c = self.next_char_raw()
 
-    private static ProblemException problem(ConfigOrigin origin, String what, String message,
-            boolean suggestQuotes, Throwable cause) {
-        if (what == null || message == null)
-            throw new ConfigException.BugOrBroken(
-                    "internal error, creating bad ProblemException");
-        return new ProblemException(Tokens.newProblem(origin, what, message, suggestQuotes,
-                cause));
-    }
+        # put back the char that ended the unquoted text
+        self.put_back(c)
 
-    private static ProblemException problem(ConfigOrigin origin, String message) {
-        return problem(origin, "", message, null);
-    }
+        return tokens.new_unquoted_text(origin=origin, s=s)
 
-    private static ConfigOrigin lineOrigin(ConfigOrigin baseOrigin,
-            int lineNumber) {
-        return ((SimpleConfigOrigin) baseOrigin).setLineNumber(lineNumber);
-    }
+    def pull_number(self, first_char):
+        """
+        :param first_char: character
+        :return: Token
+        :raises ProblemException:
+        """
+        s = first_char
+        contained_decimal_or_e = False
+        c = self.next_char_raw()
+        while (c is not None) and (c in number_chars):  # todo - is None the file.read() equivalent of codepoint -1?
+            if c in '.eE':
+                contained_decimal_or_e = True
+            s += c
+            c = self.next_char_raw()
 
-    // ONE char has always been consumed, either the # or the first /, but
-    // not both slashes
-    private Token pullComment(int firstChar) {
-        if (firstChar == '/') {
-            int discard = nextCharRaw();
-            if (discard != '/')
-                throw new ConfigException.BugOrBroken("called pullComment but // not seen");
-        }
+        # the last character we looked at wasn't part of the number, put it back
+        self.put_back(c)
 
-        StringBuilder sb = new StringBuilder();
-        for (;;) {
-            int c = nextCharRaw();
-            if (c == -1 || c == '\n') {
-                putBack(c);
-                return Tokens.newComment(lineOrigin, sb.toString());
-            } else {
-                sb.appendCodePoint(c);
-            }
-        }
-    }
+        try:
+            if contained_decimal_or_e:
+                # force floating point representation
+                return tokens.new_double(
+                    origin=self.line_origin, value=float(s), original_text=s)
+            else:
+                return tokens.new_int(
+                    origin=self.line_origin, value=int(s), original_text=s)
 
-    // chars JSON allows a number to start with
-    static final String firstNumberChars = "0123456789-";
-    // chars JSON allows to be part of a number
-    static final String numberChars = "0123456789eE+-.";
-    // chars that stop an unquoted string
-    static final String notInUnquotedText = "$\"{}[]:=,+#`^?!@*&\\";
+        except ValueError:
+            # not a number after all, see if it's an unquoted string.
+            for u in s:
+                if u in not_in_unquoted_text:
+                    raise self.problem(
+                        what=u,
+                        message="Reserved character '{}' is not allowed "
+                                "outside quotes".format(u),
+                        suggest_quotes=True,
+                    )
+            # no evil chars so we just decide this was a string and not a number.
+            return tokens.new_unquoted_text(origin=self.line_origin, s=s)
 
-    // The rules here are intended to maximize convenience while
-    // avoiding confusion with real valid JSON. Basically anything
-    // that parses as JSON is treated the JSON way and otherwise
-    // we assume it's a string and let the parser sort it out.
-    private Token pullUnquotedText() {
-        ConfigOrigin origin = lineOrigin;
-        StringBuilder sb = new StringBuilder();
-        int c = nextCharRaw();
-        while (true) {
-            if (c == -1) {
-                break;
-            } else if (notInUnquotedText.indexOf(c) >= 0) {
-                break;
-            } else if (isWhitespace(c)) {
-                break;
-            } else if (startOfComment(c)) {
-                break;
-            } else {
-                sb.appendCodePoint(c);
-            }
+    def pull_escape_sequence(self):
+        """
+        :return: string
+        :raises ProblemException:
+        """
+        escaped = self.next_char_raw()
+        if escaped is None:  # todo - is None the file.read() equivalent of codepoint -1?
+            raise self.problem(message="End of input but backslash "
+                                       "in string had nothing after it")
 
-            // we parse true/false/null tokens as such no matter
-            // what is after them, as long as they are at the
-            // start of the unquoted token.
-            if (sb.length() == 4) {
-                String s = sb.toString();
-                if (s.equals("true"))
-                    return Tokens.newBoolean(origin, true);
-                else if (s.equals("null"))
-                    return Tokens.newNull(origin);
-            } else if (sb.length() == 5) {
-                String s = sb.toString();
-                if (s.equals("false"))
-                    return Tokens.newBoolean(origin, false);
-            }
+        if escaped in '"\\/':
+            return escaped
 
-            c = nextCharRaw();
-        }
+        if escaped == 'b':
+            return '\b'
+        if escaped == 'f':
+            return '\f'
+        if escaped == 'n':
+            return '\n'
+        if escaped == 'r':
+            return '\r'
+        if escaped == 't':
+            return '\t'
 
-        // put back the char that ended the unquoted text
-        putBack(c);
+        if escaped == 'u':
+            digits = ''
+            for _ in range(4):
+                c = self.next_char_raw()
+                if c is None:
+                    raise self.problem(message="End of input but expecting 4 "
+                                               "hex digits for \\uXXXX escape")
+                digits += c
 
-        String s = sb.toString();
-        return Tokens.newUnquotedText(origin, s);
-    }
+            try:
+                return eval('u"\\u{}"'.format(s))  # todo - this is terrible
+            except Exception as e:
+                raise self.problem(
+                    what=digits,
+                    message="Malformed hex digits after \\u escape in string: '{}'".format(digits),
+                    cause=e
+                )
+        raise self.problem(
+            what=escaped,
+            message="backslash followed by '{}', this is not a valid escape "
+                    "sequence (quoted strings use JSON escaping, so use "
+                    "double-backslash \\\\ for literal backslash)".format(escaped))
 
-    private Token pullNumber(int firstChar) throws ProblemException {
-        StringBuilder sb = new StringBuilder();
-        sb.appendCodePoint(firstChar);
-        boolean containedDecimalOrE = false;
-        int c = nextCharRaw();
-        while (c != -1 && numberChars.indexOf(c) >= 0) {
-            if (c == '.' || c == 'e' || c == 'E')
-                containedDecimalOrE = true;
-            sb.appendCodePoint(c);
-            c = nextCharRaw();
-        }
-        // the last character we looked at wasn't part of the number, put it
-        // back
-        putBack(c);
-        String s = sb.toString();
-        try {
-            if (containedDecimalOrE) {
-                // force floating point representation
-                return Tokens.newDouble(lineOrigin, Double.parseDouble(s), s);
-            } else {
-                // this should throw if the integer is too large for Long
-                return Tokens.newLong(lineOrigin, Long.parseLong(s), s);
-            }
-        } catch (NumberFormatException e) {
-            // not a number after all, see if it's an unquoted string.
-            for (char u : s.toCharArray()) {
-                if (notInUnquotedText.indexOf(u) >= 0)
-                    throw problem(asString(u), "Reserved character '" + asString(u)
-                                  + "' is not allowed outside quotes", true /* suggestQuotes */);
-            }
-            // no evil chars so we just decide this was a string and
-            // not a number.
-            return Tokens.newUnquotedText(lineOrigin, s);
-        }
-    }
+    def pull_triple_quoted_string(self):
+        """
+        we are after the opening triple quote and need to consume the
+        close triple
 
-    private void pullEscapeSequence(StringBuilder sb) throws ProblemException {
-        int escaped = nextCharRaw();
-        if (escaped == -1)
-            throw problem("End of input but backslash in string had nothing after it");
+        :return: string
+        :raises ProblemException:
+        """
+        s = ''
+        consecutive_quotes = 0
+        while True:
+            c = self.next_char_raw()
 
-        switch (escaped) {
-        case '"':
-            sb.append('"');
-            break;
-        case '\\':
-            sb.append('\\');
-            break;
-        case '/':
-            sb.append('/');
-            break;
-        case 'b':
-            sb.append('\b');
-            break;
-        case 'f':
-            sb.append('\f');
-            break;
-        case 'n':
-            sb.append('\n');
-            break;
-        case 'r':
-            sb.append('\r');
-            break;
-        case 't':
-            sb.append('\t');
-            break;
-        case 'u': {
-            // kind of absurdly slow, but screw it for now
-            char[] a = new char[4];
-            for (int i = 0; i < 4; ++i) {
-                int c = nextCharRaw();
-                if (c == -1)
-                    throw problem("End of input but expecting 4 hex digits for \\uXXXX escape");
-                a[i] = (char) c;
-            }
-            String digits = new String(a);
-            try {
-                sb.appendCodePoint(Integer.parseInt(digits, 16));
-            } catch (NumberFormatException e) {
-                throw problem(digits, String.format(
-                        "Malformed hex digits after \\u escape in string: '%s'", digits), e);
-            }
-        }
-            break;
-        default:
-            throw problem(
-                    asString(escaped),
-                    String.format(
-                            "backslash followed by '%s', this is not a valid escape sequence (quoted strings use JSON escaping, so use double-backslash \\\\ for literal backslash)",
-                            asString(escaped)));
-        }
-    }
+            if c == '"':
+                consecutive_quotes += 1
+            elif consecutive_quotes >= 3:
+                # the last three quotes end the string and the others are kept.
+                s = s[:-3]
+                self.put_back(c)
+                break
+            else:
+                consecutive_quotes = 0
+                if c is None:  # todo - is None the file.read() equivalent of codepoint -1?
+                    raise self.problem(
+                        message="End of input but triple-quoted string "
+                                "was still open"
+                    )
+                if c == '\n':
+                    # keep the line number accurate
+                    self.line_number += 1
+                    line_origin = origin.set_line_number(self.line_number)
 
-    private void appendTripleQuotedString(StringBuilder sb) throws ProblemException {
-        // we are after the opening triple quote and need to consume the
-        // close triple
-        int consecutiveQuotes = 0;
-        for (;;) {
-            int c = nextCharRaw();
+            s += c
 
-            if (c == '"') {
-                consecutiveQuotes += 1;
-            } else if (consecutiveQuotes >= 3) {
-                // the last three quotes end the string and the others are
-                // kept.
-                sb.setLength(sb.length() - 3);
-                putBack(c);
-                break;
-            } else {
-                consecutiveQuotes = 0;
-                if (c == -1)
-                    throw problem("End of input but triple-quoted string was still open");
-                else if (c == '\n') {
-                    // keep the line number accurate
-                    lineNumber += 1;
-                    lineOrigin = origin.setLineNumber(lineNumber);
-                }
-            }
+        return s
 
-            sb.appendCodePoint(c);
-        }
-    }
+    def pull_quoted_string(self):
+        """
+        the open quote has already been consumed
 
-    private Token pullQuotedString() throws ProblemException {
-        // the open quote has already been consumed
-        StringBuilder sb = new StringBuilder();
-        int c = '\0'; // value doesn't get used
-        do {
-            c = nextCharRaw();
-            if (c == -1)
-                throw problem("End of input but string quote was still open");
+        :return: Token
+        :raises ProblemException:
+        """
 
-            if (c == '\\') {
-                pullEscapeSequence(sb);
-            } else if (c == '"') {
-                // end the loop, done!
-            } else if (Character.isISOControl(c)) {
-                throw problem(asString(c), "JSON does not allow unescaped " + asString(c)
-                        + " in quoted strings, use a backslash escape");
-            } else {
-                sb.appendCodePoint(c);
-            }
-        } while (c != '"');
+        s = ''
 
-        // maybe switch to triple-quoted string, sort of hacky...
-        if (sb.length() == 0) {
-            int third = nextCharRaw();
-            if (third == '"') {
-                appendTripleQuotedString(sb);
-            } else {
-                putBack(third);
-            }
-        }
+        while True:
+            c = self.next_char_raw()
+            if c is None:  # todo - is None the file.read() equivalent of codepoint -1?
+                raise self.problem(message="End of input but string "
+                                           "quote was still open")
 
-        return Tokens.newString(lineOrigin, sb.toString());
-    }
+            if c == '\\':
+                s += self.pull_escape_sequence()
+            elif c == '"':
+                break
+            elif is_iso_control_character(c):
+                raise self.problem(
+                    what=c,
+                    message="JSON does not allow unescaped {} in quoted "
+                            "strings, use a backslash escape".format(c))
+            else:
+                s += c
 
-    private Token pullPlusEquals() throws ProblemException {
-        // the initial '+' has already been consumed
-        int c = nextCharRaw();
-        if (c != '=') {
-            throw problem(asString(c), "'+' not followed by =, '" + asString(c)
-                    + "' not allowed after '+'", true /* suggestQuotes */);
-        }
-        return Tokens.PLUS_EQUALS;
-    }
+        # maybe switch to triple-quoted string, sort of hacky...
+        if len(s) == 0:
+            third = self.next_char_raw()
+            if third == '"':
+                s += self.pull_triple_quoted_string()
+            else:
+                self.put_back(third)
 
-    private Token pullSubstitution() throws ProblemException {
-        // the initial '$' has already been consumed
-        ConfigOrigin origin = lineOrigin;
-        int c = nextCharRaw();
-        if (c != '{') {
-            throw problem(asString(c), "'$' not followed by {, '" + asString(c)
-                    + "' not allowed after '$'", true /* suggestQuotes */);
-        }
+        return tokens.new_string(origin=self.line_origin, value=s)
 
-        boolean optional = false;
-        c = nextCharRaw();
-        if (c == '?') {
-            optional = true;
-        } else {
-            putBack(c);
-        }
+    def pull_plus_equals(self):
+        """
+        the initial '+' has already been consumed
 
-        WhitespaceSaver saver = new WhitespaceSaver();
-        List<Token> expression = new ArrayList<Token>();
+        :return: Token
+        :raises ProblemException:
+        """
+        c = self.next_char_raw()
+        if c != '=':
+            raise self.problem(
+                what=c,
+                message="'+' not followed by =, '{}' not allowed after '+'".format(c),
+                suggest_quotes=True)
 
-        Token t;
-        do {
-            t = pullNextToken(saver);
+        return TokenType.plus_equals
 
-            // note that we avoid validating the allowed tokens inside
-            // the substitution here; we even allow nested substitutions
-            // in the tokenizer. The parser sorts it out.
-            if (t == Tokens.CLOSE_CURLY) {
-                // end the loop, done!
-                break;
-            } else if (t == Tokens.END) {
-                throw problem(origin,
-                        "Substitution ${ was not closed with a }");
-            } else {
-                Token whitespace = saver.check(t, origin, lineNumber);
-                if (whitespace != null)
-                    expression.add(whitespace);
-                expression.add(t);
-            }
-        } while (true);
+    def pull_substitution(self):
+        """
+        the initial '$' has already been consumed
 
-        return Tokens.newSubstitution(origin, optional, expression);
-    }
+        :return: Token
+        :raises ProblemException:
+        """
+        origin = self.line_origin
+        c = self.next_char_raw()
+        if c != '{':
+            raise self.problem(
+                what=c,
+                message="'$' not followed by {, '{}' not allowed after '$'".format(c),
+                suggest_quotes=True)
 
-    private Token pullNextToken(WhitespaceSaver saver) throws ProblemException {
-        int c = nextCharAfterWhitespace(saver);
-        if (c == -1) {
-            return Tokens.END;
-        } else if (c == '\n') {
-            // newline tokens have the just-ended line number
-            Token line = Tokens.newLine(lineOrigin);
-            lineNumber += 1;
-            lineOrigin = origin.setLineNumber(lineNumber);
-            return line;
-        } else {
-            Token t;
-            if (startOfComment(c)) {
-                t = pullComment(c);
-            } else {
-                switch (c) {
-                case '"':
-                    t = pullQuotedString();
-                    break;
-                case '$':
-                    t = pullSubstitution();
-                    break;
-                case ':':
-                    t = Tokens.COLON;
-                    break;
-                case ',':
-                    t = Tokens.COMMA;
-                    break;
-                case '=':
-                    t = Tokens.EQUALS;
-                    break;
-                case '{':
-                    t = Tokens.OPEN_CURLY;
-                    break;
-                case '}':
-                    t = Tokens.CLOSE_CURLY;
-                    break;
-                case '[':
-                    t = Tokens.OPEN_SQUARE;
-                    break;
-                case ']':
-                    t = Tokens.CLOSE_SQUARE;
-                    break;
-                case '+':
-                    t = pullPlusEquals();
-                    break;
-                default:
-                    t = null;
-                    break;
-                }
+        c = self.next_char_raw()
+        optional = c == '?'
+        if not optional:
+            self.put_back(c)
 
-                if (t == null) {
-                    if (firstNumberChars.indexOf(c) >= 0) {
-                        t = pullNumber(c);
-                    } else if (notInUnquotedText.indexOf(c) >= 0) {
-                        throw problem(asString(c), "Reserved character '" + asString(c)
-                                + "' is not allowed outside quotes", true /* suggestQuotes */);
-                    } else {
-                        putBack(c);
-                        t = pullUnquotedText();
-                    }
-                }
-            }
+        saver = WhitespaceSaver()
+        expression = []  # List<Token>
 
-            if (t == null)
-                throw new ConfigException.BugOrBroken(
-                        "bug: failed to generate next token");
+        while True:
+            t = self.pull_next_token(saver)
 
-            return t;
-        }
-    }
+            # note that we avoid validating the allowed tokens inside
+            # the substitution here; we even allow nested substitutions
+            # in the tokenizer. The parser sorts it out.
+            if t == Tokens.CLOSE_CURLY:
+                break
+            elif t == Tokens.END:
+                raise self.problem(
+                    origin=origin,
+                    message="Substitution ${ was not closed with a }")
+            else:
+                whitespace = saver.check(
+                    t=t, base_origin=origin, line_number=self.line_number)
+                if whitespace is not None:
+                    expression.append(whitespace)
+                expression.append(t)
 
-    private void queueNextToken() throws ProblemException {
-        Token t = pullNextToken(whitespaceSaver);
-        Token whitespace = whitespaceSaver.check(t, origin, lineNumber);
-        if (whitespace != null)
-            tokens.add(whitespace);
+        return tokens.new_substitution(
+            origin=origin, optional=optional, expression=expression)
 
-        tokens.add(t);
-    }
+    def pull_next_token(self, saver):
+        """
+        :param saver: WhitespaceSaver
+        :return: Token
+        :raises ProblemException:
+        """
+        c = self.next_char_after_whitespace(saver)
+        if c is None:  # todo - is None the file.read() equivalent of codepoint -1?
+            return Tokens.END
 
-    @Override
-    public boolean hasNext() {
-        return !tokens.isEmpty();
-    }
+        if c == '\n':
+            # newline tokens have the just-ended line number
+            line = tokens.new_line(origin=self.line_origin)
+            self.line_number += 1
+            self.line_origin = origin.set_line_number(self.line_number)
+            return line
 
-    @Override
-    public Token next() {
-        Token t = tokens.remove();
-        if (tokens.isEmpty() && t != Tokens.END) {
-            try {
-                queueNextToken();
-            } catch (ProblemException e) {
-                tokens.add(e.problem());
-            }
-            if (tokens.isEmpty())
-                throw new ConfigException.BugOrBroken(
-                        "bug: tokens queue should not be empty here");
-        }
-        return t;
-    }
+        t = None
+        if self.start_of_comment(c):
+            t = self.pull_comment(c)
+        else:
+            if c == '"':
+                t = self.pull_quoted_string()
+            elif c == '$':
+                t = self.pull_substitution()
+            elif c == ':':
+                t = Tokens.COLON
+            elif c == ',':
+                t = Tokens.COMMA
+            elif c == '=':
+                t = Tokens.EQUALS
+            elif c == '{':
+                t = Tokens.OPEN_CURLY
+            elif c == '}':
+                t = Tokens.CLOSE_CURLY
+            elif c == '[':
+                t = Tokens.OPEN_SQUARE
+            elif c == ']':
+                t = Tokens.CLOSE_SQUARE
+            elif c == '+':
+                t = self.pull_plus_equals()
 
-    @Override
-    public void remove() {
-        throw new UnsupportedOperationException(
-                "Does not make sense to remove items from token stream");
-    }
-}
+            if t is None:
+                if c in first_number_chars:
+                    t = self.pull_number(c)
+                elif c in not_in_unquoted_text:
+                    raise self.problem(
+                        what=c,
+                        message="Reserved character '{}' is not allowed outside quotes",
+                        suggest_quotes=True)
+                else:
+                    self.put_back(c)
+                    t = self.pull_unquoted_text()
+
+        if t is None:
+            raise exceptions.BugOrBroken("bug: failed to generate next token")
+
+        return t
+
+    def queue_next_token(self):
+        """
+        :raises ProblemException:
+        """
+        t = self.pull_next_token(self.whitespace_saver)
+        whitespace = self.whitespace_saver.check(
+            t=t, base_origin=self.origin, line_number=self.line_number)
+        if whitespace is not None:
+            self.tokens.append(whitespace)
+
+        self.tokens.append(t)
+
+    # todo should ``has_next`` and ``next`` implement python's iterator protocol instead?
+
+    def has_next(self):
+        """
+        :return: boolean
+        """
+        return len(self.tokens) != 0
+
+    def next(self):
+        """
+        :return: Token
+        """
+        (t, self.tokens) = (self.tokens[0], self.tokens[1:])  # todo is there a better way to do a queue?
+
+        if (not self.has_next()) and (t != Tokens.END):
+            try:
+                self.queue_next_token()
+            except ProblemException as e:
+                tokens.append(e.problem)
+            if not self.has_next():
+                raise exceptions.BugOrBroken(
+                    "bug: tokens queue should not be empty here");
+
+        return t
