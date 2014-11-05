@@ -17,8 +17,7 @@ def is_iso_control_character(c):
     the range '\u0000' through '\u001F' or in the range '\u007F' through '\u009F'.
     http://docs.oracle.com/javase/7/docs/api/java/lang/Character.html#isISOControl(int)
     """
-    return u'\u0000' <= c and c <= u'\u001F' \
-        or u'\u007F' <= c and c <= u'\u009F'
+    return (u'\u0000' <= c <= u'\u001F') or (u'\u007F' <= c <= u'\u009F')
 
 
 def as_string(c):
