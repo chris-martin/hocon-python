@@ -1,5 +1,7 @@
 class ConfigObject(ConfigValue):
     """
+    extends Map<String, ConfigValue>
+
      * Subtype of {@link ConfigValue} representing an object (AKA dictionary or map)
      * value, as in JSON's curly brace <code>{ "a" : 42 }</code> syntax.
      *
@@ -146,4 +148,7 @@ class ConfigObject(ConfigValue):
         :param value: ConfigValue
         :return: ConfigObject
         """
+        raise NotImplementedError
+
+    def is_empty(self):
         raise NotImplementedError
